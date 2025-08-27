@@ -64,24 +64,7 @@ var Module = {
     }
 };
 
-// Import the LAMMPS WebAssembly module after setting up Module
-self.postMessage({
-    type: 'stdout', 
-    data: 'About to import lmp.js...'
-});
-
-try {
-    importScripts('lmp.js');
-    self.postMessage({
-        type: 'stdout',
-        data: 'lmp.js imported successfully'
-    });
-} catch (err) {
-    self.postMessage({
-        type: 'error',
-        data: 'Failed to import lmp.js: ' + err.message
-    });
-}
+// LAMMPS module will be imported after initialization message
 
 // Set a timeout to detect if initialization hangs
 setTimeout(function() {
@@ -98,6 +81,10 @@ self.onmessage = function(e) {
     const { type, data } = e.data;
     
     switch (type) {
+        case 'init':
+            initializeLAMMPS(data.lmpPath || 'lmp.js');
+            break;
+            
         case 'upload-file':
             handleFileUpload(data);
             break;
@@ -125,6 +112,26 @@ self.onmessage = function(e) {
             });
     }
 };
+
+function initializeLAMMPS(lmpPath) {
+    self.postMessage({
+        type: 'stdout', 
+        data: `About to import LAMMPS from: ${lmpPath}`
+    });
+
+    try {
+        importScripts(lmpPath);
+        self.postMessage({
+            type: 'stdout',
+            data: `LAMMPS module imported successfully from: ${lmpPath}`
+        });
+    } catch (err) {
+        self.postMessage({
+            type: 'error',
+            data: `Failed to import LAMMPS module from ${lmpPath}: ${err.message}`
+        });
+    }
+}
 
 function handleFileUpload(fileData) {
     if (!isInitialized) {

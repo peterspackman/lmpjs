@@ -1,6 +1,6 @@
 {
   "name": "@peterspackman/lmpjs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JavaScript/WebAssembly bindings for LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,15 @@
       "default": "./dist/index.js"
     },
     "./worker": "./dist/lammps-worker.js",
-    "./wasm": "./dist/lmp.wasm"
+    "./lammps-worker": "./dist/lammps-worker.js",
+    "./dist/lammps-worker.js": "./dist/lammps-worker.js",
+    "./wasm": "./dist/lmp.wasm",
+    "./lmp": "./dist/lmp.js",
+    "./lmp-wasm": "./dist/lmp.wasm",
+    "./types": "./dist/types.js",
+    "./dist/lmp.js": "./dist/lmp.js",
+    "./dist/lmp.wasm": "./dist/lmp.wasm",
+    "./dist/types.js": "./dist/types.js"
   },
   "files": [
     "dist",
