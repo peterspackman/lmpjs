@@ -33,8 +33,7 @@
     "dev:examples": "vite examples --host --open",
     "preview": "npm run build && vite preview examples --host",
     "test": "vitest run",
-    "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage"
+    "test:watch": "vitest watch"
   },
   "repository": {
     "type": "git",

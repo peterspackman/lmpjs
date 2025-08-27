@@ -84,9 +84,6 @@ jobs:
     - name: Run tests
       run: npm test
 
-    - name: Run tests with coverage
-      if: matrix.node-version == 20
-      run: npm run test:coverage
 
     - name: Verify build outputs
       run: |

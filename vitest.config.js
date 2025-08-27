@@ -14,20 +14,6 @@ export default defineConfig({
     // Timeout for tests (important for WASM tests)
     testTimeout: 10000,
     
-    // Coverage configuration
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      exclude: [
-        'node_modules/**',
-        'test/**',
-        'scripts/**',
-        'examples/**',
-        'dist/**',
-        'wasm/**',
-        'lammps-src/**'
-      ]
-    },
     
     // Mock setup
     setupFiles: [],
