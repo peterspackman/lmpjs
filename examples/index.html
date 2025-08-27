@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Lennard-Jones Simulation</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .error {
+            color: #f87171;
+        }
+        #output::-webkit-scrollbar {
+            width: 6px;
+        }
+        #output::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        #output::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="max-w-full mx-auto p-6 bg-slate-50 min-h-screen">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
+                <h2 class="text-xl font-semibold px-6 pt-6 pb-0 text-gray-900">Simulation Details</h2>
+                <div class="p-6">
+                    <div class="bg-slate-50 rounded-lg p-5 mb-6 border border-slate-200">
+                        <div class="text-sm space-y-1">
+                            <div><span class="font-medium text-blue-600">System:</span> 3D FCC lattice of particles</div>
+                            <div><span class="font-medium text-blue-600">Potential:</span> Lennard-Jones (LJ)</div>
+                            <div><span class="font-medium text-blue-600">Ensemble:</span> NVE (constant energy)</div>
+                            <div><span class="font-medium text-blue-600">Duration:</span> 500 timesteps</div>
+                        </div>
+                    </div>
+                    
+                    <h3 class="text-lg font-medium mb-3 text-gray-900">LAMMPS Input Script</h3>
+                    <pre id="input-script" class="bg-slate-50 border border-gray-200 rounded-lg p-4 text-xs overflow-auto font-mono mb-6 max-h-80">units lj
+dimension 3
+atom_style atomic
+
+# Create 3D FCC lattice
+lattice fcc 0.8442
+region box block 0 8 0 8 0 8
+create_box 1 box
+create_atoms 1 box
+
+# Set particle mass
+mass 1 1.0
+
+# Initialize velocities (reduced units)
+velocity all create 1.44 87287 loop geom
+
+# Lennard-Jones potential
+pair_style lj/cut 2.5
+pair_coeff 1 1 1.0 1.0 2.5
+
+# Neighbor list settings
+neighbor 0.3 bin
+neigh_modify delay 0 every 20 check no
+
+# Integration (NVE ensemble)
+fix 1 all nve
+
+# Output thermodynamic info every 50 steps
+thermo 50
+
+# Write initial data file
+write_data initial.data
+
+# Write trajectory in XYZ format (more widely supported)
+dump xyz all xyz 10 trajectory.xyz
+dump_modify xyz element Ar
+
+# Run simulation
+run 500
+
+# Write final data file
+write_data final.data
+
+# Write final xyz snapshot
+dump xyz_final all xyz 1 final.xyz
+dump_modify xyz_final element Ar</pre>
+                
+                    <div class="flex flex-wrap gap-3 mb-6">
+                        <button id="run-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium text-sm transition-colors duration-200">Run Simulation</button>
+                        <button id="clear-btn" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-medium text-sm transition-colors duration-200">Clear Output</button>
+                    </div>
+                    
+                    <div id="status" class="text-sm text-gray-600 font-medium">Ready to run simulation</div>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
+                <h2 class="text-xl font-semibold px-6 pt-6 pb-0 text-gray-900">Output</h2>
+                <div class="p-6">
+                    <div id="output" class="h-96 bg-slate-900 text-slate-200 p-4 rounded-lg overflow-y-auto font-mono text-xs whitespace-pre-wrap border border-slate-700">Waiting for simulation to start...</div>
+                    
+                    <div id="download-controls" style="display: none;" class="mt-6 pt-6 border-t border-gray-200">
+                        <h4 class="text-base font-medium mb-4 text-gray-900">Download Files:</h4>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button id="download-initial-data" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">Initial Data</button>
+                            <button id="download-final-data" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">Final Data</button>
+                            <button id="download-xyz" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">Trajectory (XYZ)</button>
+                            <button id="download-final-xyz" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">Final XYZ</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { createLAMMPS } from './lmpjs-local.js';
+        
+        let lammps = null;
+        let isReady = false;
+        
+        const runBtn = document.getElementById('run-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const outputEl = document.getElementById('output');
+        const statusEl = document.getElementById('status');
+        const downloadControls = document.getElementById('download-controls');
+        const inputScript = document.getElementById('input-script').textContent;
+        
+        // Download buttons
+        const downloadInitialDataBtn = document.getElementById('download-initial-data');
+        const downloadFinalDataBtn = document.getElementById('download-final-data');
+        const downloadXyzBtn = document.getElementById('download-xyz');
+        const downloadFinalXyzBtn = document.getElementById('download-final-xyz');
+        
+        function updateStatus(text) {
+            statusEl.textContent = text;
+        }
+        
+        function appendOutput(text, isError = false) {
+            const span = document.createElement('span');
+            span.textContent = text + '\n';
+            if (isError) span.className = 'error';
+            outputEl.appendChild(span);
+            outputEl.scrollTop = outputEl.scrollHeight;
+        }
+        
+        function clearOutput() {
+            outputEl.innerHTML = '';
+        }
+        
+        function downloadFile(filename, content, mimeType = 'application/octet-stream') {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        
+        function setupDownloadButtons() {
+            downloadInitialDataBtn.addEventListener('click', async () => {
+                try {
+                    const dataContent = await lammps.FS.readFile('/sim/initial.data', { encoding: 'utf8' });
+                    downloadFile('initial.data', dataContent, 'text/plain');
+                    appendOutput('Downloaded initial.data');
+                } catch (e) {
+                    appendOutput('Error downloading initial data: ' + e.message, true);
+                }
+            });
+            
+            downloadFinalDataBtn.addEventListener('click', async () => {
+                try {
+                    const dataContent = await lammps.FS.readFile('/sim/final.data', { encoding: 'utf8' });
+                    downloadFile('final.data', dataContent, 'text/plain');
+                    appendOutput('Downloaded final.data');
+                } catch (e) {
+                    appendOutput('Error downloading final data: ' + e.message, true);
+                }
+            });
+            
+            downloadXyzBtn.addEventListener('click', async () => {
+                try {
+                    const xyzContent = await lammps.FS.readFile('/sim/trajectory.xyz', { encoding: 'utf8' });
+                    downloadFile('trajectory.xyz', xyzContent, 'chemical/x-xyz');
+                    appendOutput('Downloaded trajectory.xyz');
+                } catch (e) {
+                    appendOutput('Error downloading XYZ trajectory: ' + e.message, true);
+                }
+            });
+            
+            downloadFinalXyzBtn.addEventListener('click', async () => {
+                try {
+                    const xyzContent = await lammps.FS.readFile('/sim/final.xyz', { encoding: 'utf8' });
+                    downloadFile('final.xyz', xyzContent, 'chemical/x-xyz');
+                    appendOutput('Downloaded final.xyz');
+                } catch (e) {
+                    appendOutput('Error downloading final XYZ: ' + e.message, true);
+                }
+            });
+        }
+        
+        async function initLAMMPS() {
+            updateStatus('Initializing LAMMPS...');
+            appendOutput('Loading LAMMPS WebAssembly module...');
+            
+            try {
+                lammps = await createLAMMPS({
+                    print: (text) => appendOutput(text),
+                    printErr: (text) => appendOutput(text, true),
+                    locateFile: (path) => {
+                        if (path.endsWith('.wasm')) {
+                            return './' + path;
+                        }
+                        return path;
+                    }
+                });
+                
+                // Create simulation directory
+                lammps.FS.mkdir('/sim');
+                lammps.FS.chdir('/sim');
+                
+                isReady = true;
+                updateStatus('Ready');
+                runBtn.disabled = false;
+                appendOutput('LAMMPS initialized successfully!');
+                
+                // Setup download buttons
+                setupDownloadButtons();
+                
+            } catch (error) {
+                appendOutput('Failed to initialize LAMMPS: ' + error.message, true);
+                updateStatus('Error');
+            }
+        }
+        
+        async function runSimulation() {
+            if (!isReady) {
+                appendOutput('LAMMPS not ready yet!', true);
+                return;
+            }
+            
+            updateStatus('Running simulation...');
+            runBtn.disabled = true;
+            
+            try {
+                appendOutput('\n=== Starting 3D Lennard-Jones Simulation ===');
+                
+                // Write input script to virtual filesystem
+                lammps.FS.writeFile('/sim/input.lmp', inputScript);
+                
+                // Run LAMMPS simulation
+                const exitCode = lammps.callMain(['-in', 'input.lmp']);
+                
+                appendOutput(`\n=== Simulation completed with exit code: ${exitCode} ===`);
+                
+                // Show download buttons after successful simulation
+                downloadControls.style.display = 'block';
+                appendOutput('Output files ready for download');
+                
+                updateStatus('Simulation complete');
+                
+            } catch (error) {
+                appendOutput('Simulation error: ' + error.message, true);
+                updateStatus('Error');
+            }
+            
+            runBtn.disabled = false;
+        }
+        
+        // Event listeners
+        runBtn.addEventListener('click', runSimulation);
+        clearBtn.addEventListener('click', clearOutput);
+        
+        // Initialize LAMMPS on page load
+        initLAMMPS();
+    </script>
+</body>
+</html>

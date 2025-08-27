@@ -1,0 +1,314 @@
+name: LAMMPS WASM Tests & Publish
+
+on:
+  push:
+    branches: ["main", "develop"]
+    tags: "v*"
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'examples/**'
+      - 'package.json'
+      - '.github/workflows/build_nodejs.yml'
+  pull_request:
+    branches: ["main", "develop"]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'examples/**'
+      - 'package.json'
+      - '.github/workflows/build_nodejs.yml'
+  workflow_dispatch:
+    inputs:
+      upload_to_npm:
+        description: 'Upload to npm after building'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  test-js:
+    name: Test LAMMPS JavaScript Package (Node.js ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+      fail-fast: false
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Install system dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y python3-numpy libpthread-stubs0-dev ninja-build cmake
+
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: package-lock.json
+
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: '3.1.69'
+        actions-cache-folder: 'emsdk-cache'
+
+    - name: Cache LAMMPS source
+      uses: actions/cache@v4
+      with:
+        path: |
+          lammps-src
+        key: lammps-src-${{ runner.os }}-${{ hashFiles('scripts/build.js') }}
+        restore-keys: |
+          lammps-src-${{ runner.os }}-
+
+    - name: Install package dependencies
+      run: npm ci
+
+    - name: Build WASM module (downloads LAMMPS automatically)
+      run: |
+        # Clean any stale build
+        rm -rf wasm
+        npm run build:wasm
+
+    - name: Build JavaScript wrapper
+      run: npm run build
+
+    - name: Run tests
+      run: npm test
+
+    - name: Run tests with coverage
+      if: matrix.node-version == 20
+      run: npm run test:coverage
+
+    - name: Verify build outputs
+      run: |
+        echo "Checking build outputs..."
+        ls -la dist/
+        test -f dist/lmp.js || (echo "lmp.js missing" && exit 1)
+        test -f dist/lmp.wasm || (echo "lmp.wasm missing" && exit 1)
+        test -f dist/index.js || (echo "index.js missing" && exit 1)
+        test -f dist/lammps-worker.js || (echo "lammps-worker.js missing" && exit 1)
+        echo "✓ All required files present"
+
+    - name: Test example imports (Node.js compatibility)
+      run: |
+        node -e "
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Test that the main exports work
+          if (fs.existsSync('dist/index.js')) {
+            console.log('✓ Main index.js found');
+          } else {
+            console.error('✗ Main index.js missing');
+            process.exit(1);
+          }
+          
+          // Test package.json exports
+          const pkg = require('./package.json');
+          if (pkg.exports && pkg.exports['.'] && pkg.exports['./wasm']) {
+            console.log('✓ Package exports configured');
+          } else {
+            console.error('✗ Package exports missing');
+            process.exit(1);
+          }
+          
+          console.log('✓ Package structure validated');
+        "
+
+    - name: Pack package for testing
+      run: npm pack
+
+    - name: Upload WASM build artifacts
+      if: matrix.node-version == 20 && (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+      uses: actions/upload-artifact@v4
+      with:
+        name: wasm-build
+        path: |
+          dist/
+          src/lmp.js
+          src/lmp.wasm
+        retention-days: 30
+
+    - name: Upload package artifact
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      uses: actions/upload-artifact@v4
+      with:
+        name: lmpjs-package-node${{ matrix.node-version }}
+        path: ./*.tgz
+        retention-days: 30
+
+  publish-npm:
+    name: Publish to npm
+    needs: test-js
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.upload_to_npm)
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Download WASM build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wasm-build
+        path: ./
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build package (wrapper only, using pre-built WASM)
+      run: npm run build
+
+    - name: Check if version changed
+      id: version
+      run: |
+        PACKAGE_VERSION=$(node -p "require('./package.json').version")
+        NPM_VERSION=$(npm view @peterspackman/lmpjs version 2>/dev/null || echo "0.0.0")
+        echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+        echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
+        if [ "$PACKAGE_VERSION" != "$NPM_VERSION" ]; then
+          echo "should_publish=true" >> $GITHUB_OUTPUT
+        else
+          echo "should_publish=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Publish to npm
+      if: steps.version.outputs.should_publish == 'true'
+      run: npm publish
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  
+  publish-github:
+    name: Publish to GitHub Packages
+    needs: test-js
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.upload_to_npm)
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        registry-url: 'https://npm.pkg.github.com'
+        scope: '@peterspackman'
+
+    - name: Download WASM build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wasm-build
+        path: ./
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build package (wrapper only, using pre-built WASM)
+      run: npm run build
+
+    - name: Configure package for GitHub registry
+      run: |
+        # Update package.json to use GitHub scope (already set)
+        npm pkg set publishConfig.registry="https://npm.pkg.github.com"
+
+    - name: Publish to GitHub Packages
+      run: npm publish
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-examples:
+    name: Deploy Examples to GitHub Pages
+    needs: test-js
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Download WASM build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wasm-build
+        path: ./
+
+    - name: Build examples site
+      run: |
+        mkdir -p public
+        
+        # Sync WASM files to examples using the npm script
+        npm run sync-examples
+        
+        # Copy examples as the main site
+        cp -r examples public/
+        
+        # Create overview page since examples/index.html is now the main simulation
+        cat > public/overview.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LAMMPS WebAssembly Examples</title>
+            <style>
+                body { font-family: system-ui; margin: 40px; }
+                .example { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+                .example h3 { margin-top: 0; }
+                a { color: #007acc; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <h1>LAMMPS WebAssembly Examples</h1>
+            <p>Interactive molecular dynamics simulations running in your browser.</p>
+            
+            <div class="example">
+                <h3><a href="index.html">3D Lennard-Jones Simulation</a></h3>
+                <p>Interactive 3D molecular dynamics simulation using Lennard-Jones potential with downloadable output files.</p>
+            </div>
+            
+            <footer style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee;">
+                <p><small>Powered by <a href="https://github.com/peterspackman/lmpjs">lmpjs</a> - LAMMPS WebAssembly bindings</small></p>
+            </footer>
+        </body>
+        </html>
+        EOF
+        
+        echo "Examples site built successfully"
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload to GitHub Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: public
+
+    - name: Deploy to GitHub Pages
+      uses: actions/deploy-pages@v4
