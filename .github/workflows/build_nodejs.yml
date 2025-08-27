@@ -59,6 +59,7 @@ jobs:
       with:
         version: '3.1.69'
         actions-cache-folder: 'emsdk-cache'
+        cache-key: 'emsdk-3.1.69-${{ runner.os }}'
 
     - name: Cache LAMMPS source
       uses: actions/cache@v4
@@ -69,14 +70,28 @@ jobs:
         restore-keys: |
           lammps-src-${{ runner.os }}-
 
+    - name: Cache WASM build
+      uses: actions/cache@v4
+      with:
+        path: wasm/
+        key: wasm-${{ runner.os }}-${{ hashFiles('scripts/build.js', 'lammps-src/CMakeLists.txt', 'lammps-src/src/version.h') }}-packages
+        restore-keys: |
+          wasm-${{ runner.os }}-${{ hashFiles('scripts/build.js') }}-
+          wasm-${{ runner.os }}-
+
     - name: Install package dependencies
       run: npm ci
 
-    - name: Build WASM module (downloads LAMMPS automatically)
+    - name: Build WASM module (conditional)
       run: |
-        # Clean any stale build
-        rm -rf wasm
-        npm run build:wasm
+        if [ ! -f wasm/lmp.wasm ] || [ ! -f wasm/lmp.js ]; then
+          echo "Building WASM (no cached version found)"
+          npm run build:wasm
+        else
+          echo "Using cached WASM build"
+          echo "✓ WASM files found:"
+          ls -la wasm/lmp.wasm wasm/lmp.js
+        fi
 
     - name: Build JavaScript wrapper
       run: npm run build
